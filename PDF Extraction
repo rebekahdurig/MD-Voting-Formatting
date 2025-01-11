@@ -1,0 +1,79 @@
+library(pdftools) # for pdfs
+library(tidyr)
+library(dplyr)
+
+#Let's make some simple functions to do things over and over
+convert.txt <- function(text){
+  read.table(text = paste(text, sep = '\n'), sep = '\n', quote = "")
+}
+
+#TODO: This function fails if there's one space between metrics, but the first_column_name has a space in it :(
+
+format.standard.files <- function(data, in.year, in.region, in.election_type, first_column_name, multiple_spaces_between_cols){
+  col.names <- data %>% filter(grepl(first_column_name, Candidate)) %>% select(Candidate) %>% unique
+  if(nrow(col.names) > 1){
+    print('Multiple unique rows. Check to make sure they\'re all the same. If not, the data is not valid:')
+    print(col.names)
+    col.names <- col.names[1,]
+  } else if(nrow(col.names) < 1){
+    print("No REGEX match, check for name of vote column in document.")
+  }
+  if(multiple_spaces_between_cols){
+    col.names <- stringr::str_split_1(as.character(col.names), pattern = '\\s\\s+')
+  } else {
+    col.names <- stringr::str_split_1(as.character(col.names), pattern = '\\s+')
+  }
+  col.names <- col.names[-1:-1*which(col.names == first_column_name)+1]
+  
+  data <- separate_wider_delim(data, cols = Votes, delim = stringr::regex('\\s+'), names = c(NA, col.names), too_few = 'align_start', too_many = 'merge')
+  data$Party <- ifelse(grepl('\\(', data$Candidate), sub("\\).*", '',sub(".*\\(", "", data$Candidate)),'') 
+  data <- data %>% relocate(Party, .after = Candidate)  
+  data <- cbind(year = in.year, region = in.region, election_type = in.election_type, data)
+  
+}
+
+read.standard.pdf <- function(URL, in.year, in.region, in.election_type, first_column_name = 'TOTAL VOTES', multiple_spaces_between_cols = TRUE){
+  text <- pdf_text(URL)
+  
+  table <- convert.txt(text)
+  temp <- separate_wider_delim(table, cols = V1, delim = stringr::regex('\\.(\\s+\\.)+'), names = c('Candidate','Votes'), too_few = 'align_start', too_many = 'merge')
+  
+  format.standard.files(temp, in.year, in.region, in.election_type, first_column_name, multiple_spaces_between_cols)  
+}
+
+read.standard.pdf.2.col<- function(pdf_path, in.year, in.region, in.election_type, first_column_name = "TOTAL VOTES", multiple_spaces_between_cols = TRUE) {
+  # Read PDF text
+  pdf_text_content <- pdf_text(pdf_path)
+  extracted_data <- data.frame()  # Initialize an empty data frame to store results
+  table <- convert.txt(pdf_text_content)
+    
+  # Determine midpoint for splitting columns (assumes fixed-width layout)
+  max_line_length <- max(nchar(table$V1))
+  midpoint <- ceiling(max_line_length / 2)
+    
+  # Separate lines into left and right columns
+  left_column <- as.data.frame(sapply(table, function(line) substr(line, 1, midpoint)))
+  right_column <- as.data.frame(sapply(table, function(line) substr(line, midpoint + 1, nchar(line))))
+  table <- rbind(left_column, right_column)
+  temp <- separate_wider_delim(table, cols = V1, delim = stringr::regex('\\.(\\s+\\.)+'), names = c('Candidate','Votes'), too_few = 'align_start', too_many = 'merge')
+  
+  format.standard.files(temp, in.year, in.region, in.election_type, first_column_name, multiple_spaces_between_cols)  
+}
+
+read.images <- function(file, in.year, in.region, in.election_type, first_column_name = "TOTAL VOTES", multiple_spaces_between_cols = TRUE){
+  images <- pdf_convert(file, dpi = 300)
+  text <- lapply(images, ocr)
+  table <- convert.txt(text)
+  
+  temp <- separate_wider_delim(table, cols = V1, delim = stringr::regex('\\.(\\s+\\.)+'), names = c('Candidate','Votes'), too_few = 'align_start', too_many = 'merge')
+  
+  file.remove(images)
+  
+  format.standard.files(temp, in.year, in.region, in.election_type, first_column_name, multiple_spaces_between_cols)  
+}
+
+#Examples:
+final.frederick.2016.primary <- read.standard.pdf(frederick.2016.primary, '2016','Frederick','Primary', 'VOTES')
+
+final.baltimore.2020 <- read.standard.pdf.2.col('https://boe.baltimorecity.gov/sites/default/files/2020-11-30%20%201027%20-%2003PG20%20EL45%20Election%20Summary%20Official%20Report_0.pdf',
+                                                '2020', 'Baltimore','','VOTES',F)
